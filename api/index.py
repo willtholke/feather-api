@@ -131,6 +131,74 @@ def list_submissions(
     return rows
 
 
+@app.get("/submissions/enriched", dependencies=[Depends(verify_api_key)])
+def list_submissions_enriched(
+    submitted_by: Optional[str] = None,
+    project_id: Optional[str] = None,
+    submitted_after: Optional[str] = None,
+    submitted_before: Optional[str] = None,
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    query = """
+        SELECT
+            s.submission_id,
+            s.task_id,
+            s.submitted_by,
+            s.submitted_at,
+            s.time_spent_seconds,
+            s.status AS submission_status,
+            t.title AS task_title,
+            t.type AS task_type,
+            t.status AS task_status,
+            t.project_id,
+            COALESCE(r.review_count, 0) AS review_count,
+            COALESCE(r.avg_score, 0) AS avg_review_score,
+            COALESCE(r.median_score, 0) AS median_review_score,
+            COALESCE(r.min_score, 0) AS min_review_score,
+            COALESCE(r.max_score, 0) AS max_review_score
+        FROM submissions s
+        JOIN tasks t ON s.task_id = t.task_id
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*)::int AS review_count,
+                ROUND(AVG(qr.score)::numeric, 4) AS avg_score,
+                ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qr.score)::numeric, 4) AS median_score,
+                ROUND(MIN(qr.score)::numeric, 4) AS min_score,
+                ROUND(MAX(qr.score)::numeric, 4) AS max_score
+            FROM quality_reviews qr
+            WHERE qr.submission_id = s.submission_id
+        ) r ON true
+        WHERE 1=1
+    """
+    params = []
+
+    if submitted_by:
+        query += " AND s.submitted_by = %s"
+        params.append(submitted_by)
+    if project_id:
+        query += " AND t.project_id = %s"
+        params.append(project_id)
+    if submitted_after:
+        query += " AND s.submitted_at >= %s"
+        params.append(submitted_after)
+    if submitted_before:
+        query += " AND s.submitted_at <= %s"
+        params.append(submitted_before)
+
+    query += " ORDER BY s.submitted_at DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+
+    cur.execute(query, params)
+    rows = rows_to_dicts(cur.fetchall())
+    cur.close()
+    conn.close()
+    return rows
+
+
 @app.get("/quality_reviews", dependencies=[Depends(verify_api_key)])
 def list_quality_reviews(
     submission_id: Optional[str] = None,
