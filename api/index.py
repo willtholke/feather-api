@@ -199,6 +199,64 @@ def list_submissions_enriched(
     return rows
 
 
+@app.get("/quality_reviews/enriched", dependencies=[Depends(verify_api_key)])
+def list_quality_reviews_enriched(
+    reviewer_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    reviewed_after: Optional[str] = None,
+    reviewed_before: Optional[str] = None,
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    query = """
+        SELECT
+            qr.review_id,
+            qr.submission_id,
+            qr.reviewer_id,
+            qr.score,
+            qr.rating,
+            qr.feedback,
+            qr.reviewed_at,
+            s.task_id,
+            s.submitted_by,
+            s.submitted_at,
+            s.time_spent_seconds,
+            s.status AS submission_status,
+            t.title AS task_title,
+            t.project_id
+        FROM quality_reviews qr
+        JOIN submissions s ON qr.submission_id = s.submission_id
+        JOIN tasks t ON s.task_id = t.task_id
+        WHERE 1=1
+    """
+    params = []
+
+    if reviewer_id:
+        query += " AND qr.reviewer_id = %s"
+        params.append(reviewer_id)
+    if project_id:
+        query += " AND t.project_id = %s"
+        params.append(project_id)
+    if reviewed_after:
+        query += " AND qr.reviewed_at >= %s"
+        params.append(reviewed_after)
+    if reviewed_before:
+        query += " AND qr.reviewed_at <= %s"
+        params.append(reviewed_before)
+
+    query += " ORDER BY qr.reviewed_at DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+
+    cur.execute(query, params)
+    rows = rows_to_dicts(cur.fetchall())
+    cur.close()
+    conn.close()
+    return rows
+
+
 @app.get("/quality_reviews", dependencies=[Depends(verify_api_key)])
 def list_quality_reviews(
     submission_id: Optional[str] = None,
